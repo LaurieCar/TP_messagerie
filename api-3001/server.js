@@ -2,74 +2,122 @@ const express = require("express");
 const axios = require("axios");
 
 const PORT = 3001;
-const MY_URL = "http://localhost:" + PORT;
+const MY_URL = "http://" + process.env.MY_IP + ":" + PORT;
+
+const DELAI_PING = 5000;
+const TIMEOUT_PING = 3000;
+const MAX_ECHECS = 5;
 
 const app = express();
-app.use(express.json());
 
-const connexions = {};
-const messages = [];
-const sent = [];
+const actives = [];
+const inactives = {};
+const minuteurs = {};
 
-app.get("/status", (req, res) => {
-  res.json({ port: PORT, status: "ok" });
-});
+function envoyer(url) {
+  axios.post(url, {}, { headers: { Origin: MY_URL } }).catch((error) => {
+    console.log("Erreur en contactant " + url + " : " + error.message);
+  });
+}
+
+function activer(adresse) {
+  delete inactives[adresse];
+  if (!actives.includes(adresse)) {
+    actives.push(adresse);
+    surveiller(adresse, 0);
+  }
+}
+
+function desactiver(adresse, raison) {
+  const position = actives.indexOf(adresse);
+  if (position !== -1) actives.splice(position, 1);
+  inactives[adresse] = raison;
+  clearTimeout(minuteurs[adresse]);
+  delete minuteurs[adresse];
+}
+
+function surveiller(adresse, echecs) {
+  const delai = echecs === 0 ? DELAI_PING : 1000 * Math.pow(2, echecs - 1);
+
+  minuteurs[adresse] = setTimeout(async () => {
+    try {
+      await axios.get(adresse + "/health", { timeout: TIMEOUT_PING });
+      surveiller(adresse, 0);
+    } catch (error) {
+      echecs = echecs + 1;
+      if (echecs >= MAX_ECHECS) {
+        console.log(adresse + " ne répond plus (" + echecs + " échecs) : PERDU");
+        desactiver(adresse, "PERDU");
+      } else {
+        console.log("Ping raté vers " + adresse + " (" + echecs + "/" + MAX_ECHECS + "), nouvel essai dans " + Math.pow(2, echecs - 1) + " s");
+        surveiller(adresse, echecs);
+      }
+    }
+  }, delai);
+}
 
 app.get("/connexions", (req, res) => {
-  res.json(connexions);
+  res.json({ actives: actives, inactives: inactives });
 });
 
-app.post("/connect", async (req, res) => {
+app.post("/connect", express.json(), (req, res) => {
   const to = req.body.to;
 
   console.log("SYN envoyé à " + to);
-  connexions[to] = "SYN_ENVOYE";
-  const response = await axios.post(to + "/syn", { type: "SYN", from: MY_URL });
+  envoyer(to + "/syn");
 
-  console.log(response.data.type + " reçu de " + to);
+  res.send("SYN envoyé à " + to);
+});
 
-  console.log("ACK envoyé à " + to);
-  await axios.post(to + "/ack", { type: "ACK", from: MY_URL });
-  connexions[to] = "CONNECTE";
+app.post("/disconnect", express.json(), (req, res) => {
+  const to = req.body.to;
 
-  res.json({ message: "Connecté à " + to });
+  console.log("On oublie " + to + " (envoi de /forget)");
+  desactiver(to, "OUBLIE");
+  envoyer(to + "/forget");
+
+  res.send("Connexion avec " + to + " terminée");
 });
 
 app.post("/syn", (req, res) => {
-  console.log("SYN reçu de " + req.body.from);
-  connexions[req.body.from] = "SYN_RECU";
-  console.log("SYN-ACK envoyé à " + req.body.from);
-  res.json({ type: "SYN-ACK", from: MY_URL });
+  const from = req.headers.origin;
+
+  console.log("SYN reçu de " + from);
+  res.sendStatus(200);
+
+  console.log("SYN-ACK envoyé à " + from);
+  envoyer(from + "/syn-ack");
+});
+
+app.post("/syn-ack", (req, res) => {
+  const from = req.headers.origin;
+
+  console.log("SYN-ACK reçu de " + from);
+  res.sendStatus(200);
+
+  console.log("ACK envoyé à " + from);
+  activer(from);
+  envoyer(from + "/ack");
 });
 
 app.post("/ack", (req, res) => {
-  console.log("ACK reçu de " + req.body.from + " : connexion établie");
-  connexions[req.body.from] = "CONNECTE";
-  res.json({ message: "Connecté à " + req.body.from });
+  const from = req.headers.origin;
+
+  console.log("ACK reçu de " + from + " : connexion établie");
+  activer(from);
+  res.sendStatus(200);
 });
 
-app.post("/messages", (req, res) => {
-  console.log("Message reçu :", req.body);
-  messages.push(req.body);
-  res.json({ status: "reçu" });
+app.get("/health", (req, res) => {
+  res.sendStatus(200);
 });
 
-app.get("/messages", (req, res) => {
-  res.json(messages);
-});
+app.post("/forget", (req, res) => {
+  const from = req.headers.origin;
 
-app.post("/send", async (req, res) => {
-  const message = {
-    from: MY_URL,
-    content: req.body.content,
-  };
-  await axios.post(req.body.to + "/messages", message);
-  sent.push(message);
-  res.json({ status: "envoyé" });
-});
-
-app.get("/sent", (req, res) => {
-  res.json(sent);
+  console.log(from + " nous a oubliés : OUBLIE");
+  desactiver(from, "OUBLIE");
+  res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
