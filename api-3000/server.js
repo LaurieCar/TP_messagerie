@@ -2,7 +2,7 @@ const express = require("express");
 const axios = require("axios");
 
 const PORT = 3000;
-const MY_URL = "http://10.72.112.150:" + PORT;
+const MY_URL = "http://" + process.env.MY_IP + ":" + PORT;
 
 const app = express();
 
