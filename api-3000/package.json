@@ -1,0 +1,17 @@
+{
+  "name": "api-3000",
+  "version": "1.0.0",
+  "description": "TP Messagerie - API d'envoi et de réception de messages (port 3000)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
