@@ -2,7 +2,7 @@ const express = require("express");
 const axios = require("axios");
 
 const PORT = 3000;
-const MY_URL = "http://" + process.env.MY_IP + ":" + PORT;
+const MY_URL = process.env.MY_URL || "http://" + process.env.MY_IP + ":" + PORT;
 
 const DELAI_PING = 5000;
 const TIMEOUT_PING = 3000;
@@ -125,13 +125,8 @@ app.post("/ingress", express.json(), (req, res) => {
   const from = req.headers.origin;
   const { action, payload } = req.body;
 
-  if (!from || !actives.includes(from) || action !== "MESSAGES" || typeof payload !== "string" || payload === "") {
-    console.log("Message refusé de " + from);
-    return res.sendStatus(400);
-  }
-
   MESSAGES.push({ from: from, date: Date.now(), action: action, payload: payload });
-  console.log("Message reçu de " + from + " : " + payload);
+  console.log("Message reçu de " + from + " : " + JSON.stringify(payload));
   res.sendStatus(200);
 });
 
