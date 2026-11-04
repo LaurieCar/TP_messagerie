@@ -13,6 +13,7 @@ const app = express();
 const actives = [];
 const inactives = {};
 const minuteurs = {};
+const MESSAGES = [];
 
 function envoyer(url) {
   axios.post(url, {}, { headers: { Origin: MY_URL } }).catch((error) => {
@@ -118,6 +119,37 @@ app.post("/forget", (req, res) => {
   console.log(from + " nous a oubliés : OUBLIE");
   desactiver(from, "OUBLIE");
   res.sendStatus(200);
+});
+
+app.post("/ingress", express.json(), (req, res) => {
+  const from = req.headers.origin;
+  const { action, payload } = req.body;
+
+  if (!from || !actives.includes(from) || action !== "MESSAGES" || typeof payload !== "string" || payload === "") {
+    console.log("Message refusé de " + from);
+    return res.sendStatus(400);
+  }
+
+  MESSAGES.push({ from: from, date: Date.now(), action: action, payload: payload });
+  console.log("Message reçu de " + from + " : " + payload);
+  res.sendStatus(200);
+});
+
+app.get("/messages", (req, res) => {
+  res.json(MESSAGES);
+});
+
+app.post("/send", express.json(), async (req, res) => {
+  const { to, content } = req.body;
+
+  try {
+    await axios.post(to + "/ingress", { action: "MESSAGES", payload: content }, { headers: { Origin: MY_URL } });
+    console.log("Message envoyé à " + to + " : " + content);
+    res.send("Message envoyé à " + to);
+  } catch (error) {
+    console.log("Erreur en envoyant le message à " + to + " : " + error.message);
+    res.status(502).send("Message refusé ou non délivré : " + error.message);
+  }
 });
 
 app.listen(PORT, () => {
