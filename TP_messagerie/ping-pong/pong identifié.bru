@@ -1,0 +1,19 @@
+meta {
+  name: pong identifié
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{B}}/pong
+  body: none
+  auth: none
+}
+
+headers {
+  Origin: {{A}}
+}
+
+docs {
+  l'envoi d'un pong pour tester la connexion renvoi un 204
+}

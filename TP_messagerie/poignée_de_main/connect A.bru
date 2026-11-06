@@ -1,0 +1,19 @@
+meta {
+  name: connect A
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{A}}/connect
+  body: json
+  auth: none
+}
+
+body:json {
+  { "to": "{{B}}" }
+}
+
+docs {
+  démarrage de la connexion : Connexion établie avec http://localhost:3001
+}

@@ -1,0 +1,32 @@
+meta {
+  name: test ingress (non connecté)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{B}}/ingress
+  body: json
+  auth: none
+}
+
+headers {
+  Origin: http://addr.inconnu:3000
+}
+
+body:json {
+  {
+    "action": "MESSAGES",
+    "metadata": {
+      "source": "{{A}}",
+      "target": "{{B}}",
+      "timestamp": "2026-11-06T10:00:00.000Z"
+    },
+    "payload": { "message": "test Bruno" }
+  }
+  
+}
+
+docs {
+  tentative d'envoi d'un message sans poignée de main : 403 Forbidden
+}

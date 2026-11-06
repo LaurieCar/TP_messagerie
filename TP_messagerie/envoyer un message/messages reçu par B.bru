@@ -1,11 +1,13 @@
 meta {
-  name: Health A
+  name: messages reçu par B
   type: http
   seq: 2
 }
 
 get {
-  url: http://localhost:3000
+  url: {{B}}/messages
   body: none
   auth: none
 }
+
+

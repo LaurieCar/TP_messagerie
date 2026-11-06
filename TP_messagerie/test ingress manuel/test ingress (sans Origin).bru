@@ -1,0 +1,32 @@
+meta {
+  name: test ingress (sans Origin)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{B}}/ingress
+  body: json
+  auth: none
+}
+
+headers {
+  Origin: 
+}
+
+body:json {
+  {
+    "action": "MESSAGES",
+    "metadata": {
+      "source": "{{A}}",
+      "target": "{{B}}",
+      "timestamp": "2026-11-06T10:00:00.000Z"
+    },
+    "payload": { "message": "test Bruno" }
+  }
+  
+}
+
+docs {
+  Message envoyé sans "Origin" : 400 Bad Request
+}

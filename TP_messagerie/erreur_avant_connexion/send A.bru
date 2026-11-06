@@ -1,0 +1,20 @@
+meta {
+  name: send A
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{A}}/send
+  body: json
+  auth: none
+}
+
+body:json {
+  { "to": "{{B}}", "content": { "message": "pas encore connecté" } }
+  
+}
+
+docs {
+  Pas de connexion établie avec http://localhost:3001 : faire /connect d'abord
+}

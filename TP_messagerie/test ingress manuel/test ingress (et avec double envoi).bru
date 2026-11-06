@@ -1,0 +1,33 @@
+meta {
+  name: test ingress (et avec double envoi)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{B}}/ingress
+  body: json
+  auth: none
+}
+
+headers {
+  Origin: {{A}}
+}
+
+body:json {
+  {
+    "action": "MESSAGES",
+    "metadata": {
+      "source": "{{A}}",
+      "target": "{{B}}",
+      "timestamp": "2026-11-06T10:00:00.001Z"
+    },
+    "payload": { "message": "test d'envoi d'un message" }
+  }
+  
+}
+
+docs {
+  Le premier envoi d'un message retourne : code 201, Created
+  Mais si le même message est renvoyé un seconde fois : code 208, Already Reported
+}

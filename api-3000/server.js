@@ -3,7 +3,6 @@ const axios = require("axios");
 
 const PORT = 3000;
 const MY_URL = nettoyer(process.env.MY_URL || "http://" + process.env.MY_IP + ":" + PORT);
-
 const TIMEOUT = 15000;
 const DELAI_PING = 5000;
 const DELAI_POIGNEE_DE_MAIN = 15000;

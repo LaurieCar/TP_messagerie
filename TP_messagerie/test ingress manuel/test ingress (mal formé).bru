@@ -1,0 +1,27 @@
+meta {
+  name: test ingress (mal formé)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{B}}/ingress
+  body: json
+  auth: none
+}
+
+headers {
+  Origin: {{A}}
+}
+
+body:json {
+  {
+    "action": "MESSAGES",
+    "payload": { "message": "test Bruno" }
+  }
+  
+}
+
+docs {
+  mauvais format de message, renvoi un 400 Bad Request
+}

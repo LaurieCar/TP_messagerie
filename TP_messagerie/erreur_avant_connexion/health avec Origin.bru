@@ -1,0 +1,19 @@
+meta {
+  name: health avec Origin
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{B}}/health
+  body: none
+  auth: none
+}
+
+headers {
+  Origin: http://inconnu:3000
+}
+
+docs {
+  renvoi un Accepted
+}
