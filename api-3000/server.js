@@ -2,10 +2,15 @@ const express = require("express");
 const axios = require("axios");
 
 const PORT = 3000;
+const MY_ID = process.env.MY_ID || "";
 const MY_URL = nettoyer(process.env.MY_URL || "http://" + process.env.MY_IP + ":" + PORT);
+const AUTORITE_URL = nettoyer(process.env.AUTORITE_URL);
+
 const TIMEOUT = 15000;
 const DELAI_PING = 5000;
 const DELAI_POIGNEE_DE_MAIN = 15000;
+const DELAI_ANNONCE = 30000;
+const DUREE_FILE = 120000;
 const MAX_ESSAIS = 5;
 
 const app = express();
@@ -15,8 +20,10 @@ const actives = [];
 const inactives = {};
 const minuteurs = {};
 const pingsSansPong = {};
+const annuaire = {};
 const MESSAGES = [];
 const vus = new Set();
+let fileAttente = [];
 let dernierHorodatage = 0;
 
 function nettoyer(adresse) {
@@ -49,6 +56,43 @@ async function posterAvecRetry(url, corps) {
   }
 }
 
+function ajouterPair(id, url) {
+  if (id && url && id !== MY_ID) annuaire[id] = { id: id, url: nettoyer(url), publicKey: "" };
+}
+
+async function lireAutorite() {
+  try {
+    const response = await axios.get(AUTORITE_URL + "/pairs", { timeout: TIMEOUT });
+    response.data.forEach((pair) => ajouterPair(pair.id, pair.url));
+  } catch (error) {
+    console.log("Impossible de lire l'autorité : " + error.message);
+  }
+}
+
+async function annoncer() {
+  if (!AUTORITE_URL || !MY_ID) return;
+
+  try {
+    await axios.post(AUTORITE_URL + "/registre", { id: MY_ID, url: MY_URL, publicKey: "" }, { timeout: TIMEOUT });
+    await lireAutorite();
+  } catch (error) {
+    console.log("Autorité injoignable : " + error.message);
+  }
+}
+
+function estUneAdresse(texte) {
+  return /^https?:\/\//.test(texte);
+}
+
+async function resoudre(destinataire) {
+  if (!destinataire) return null;
+  if (estUneAdresse(destinataire)) return nettoyer(destinataire);
+
+  if (!annuaire[destinataire] && AUTORITE_URL) await lireAutorite();
+
+  return annuaire[destinataire] ? annuaire[destinataire].url : null;
+}
+
 function arreterSurveillance(adresse) {
   const position = actives.indexOf(adresse);
   if (position !== -1) actives.splice(position, 1);
@@ -64,6 +108,7 @@ function activer(adresse) {
     actives.push(adresse);
     pingsSansPong[adresse] = 0;
     surveiller(adresse, 0);
+    viderFile(adresse);
   }
 }
 
@@ -103,13 +148,24 @@ function surveiller(adresse, echecs) {
   }, delai);
 }
 
+async function posterEtape(to, etape, envoi) {
+  if (!MY_ID) return envoi(to + "/" + etape);
+
+  try {
+    return await envoi(to + "/broker/" + etape + "/" + encodeURIComponent(MY_ID));
+  } catch (error) {
+    if (error.response && error.response.status === 404) return envoi(to + "/" + etape);
+    throw error;
+  }
+}
+
 async function poigneeDeMain(to) {
   const limite = Date.now() + DELAI_POIGNEE_DE_MAIN;
 
   enCours.add(to);
   try {
     console.log("SYN envoyé à " + to);
-    await poster(to + "/syn");
+    await posterEtape(to, "syn", poster);
   } catch (error) {
     enCours.delete(to);
     console.log("Pas de réponse au SYN de " + to + " : " + error.message);
@@ -145,6 +201,51 @@ function creerMessage(cible, action, content) {
   return message;
 }
 
+function mettreEnFile(message) {
+  fileAttente.push({ message: message, expiration: Date.now() + DUREE_FILE });
+  console.log("Message pour " + message.metadata.target + " mis en file (" + DUREE_FILE / 60000 + " min)");
+  return "mis en file";
+}
+
+async function viderFile(adresse) {
+  const valides = fileAttente.filter((element) => element.expiration > Date.now());
+  const aEnvoyer = valides.filter((element) => nettoyer(element.message.metadata.target) === adresse);
+  fileAttente = valides.filter((element) => !aEnvoyer.includes(element));
+
+  for (const element of aEnvoyer) {
+    try {
+      await posterAvecRetry(adresse + "/ingress", element.message);
+      console.log("Message de la file envoyé à " + adresse);
+    } catch (error) {
+      fileAttente.push(element);
+      console.log("Erreur en vidant la file vers " + adresse + " : " + error.message);
+    }
+  }
+}
+
+async function transmettre(message, origine) {
+  const target = nettoyer(message.metadata.target);
+
+  if (actives.includes(target)) {
+    try {
+      await posterAvecRetry(target + "/ingress", message);
+      console.log("Message envoyé à " + target);
+      return "envoyé";
+    } catch (error) {
+      console.log("Erreur en envoyant le message à " + target + " : " + error.message);
+      return mettreEnFile(message);
+    }
+  }
+
+  const voisins = actives.filter((adresse) => adresse !== origine);
+  const envois = await Promise.allSettled(voisins.map((adresse) => posterAvecRetry(adresse + "/ingress", message)));
+
+  if (!envois.some((envoi) => envoi.status === "fulfilled")) return mettreEnFile(message);
+
+  console.log("Message pour " + target + " relayé à " + voisins.length + " voisin(s)");
+  return "relayé";
+}
+
 function messageValide(body) {
   const metadata = body.metadata;
   return (
@@ -156,35 +257,16 @@ function messageValide(body) {
   );
 }
 
-app.get("/connexions", (req, res) => {
-  res.json({ enCours: Array.from(enCours), actives: actives, inactives: inactives });
-});
+function enregistrerId(req) {
+  ajouterPair(req.params.id, req.headers.origin);
+}
 
-app.post("/connect", express.json(), async (req, res) => {
-  const to = nettoyer(req.body.to);
-  if (!to) return res.sendStatus(400);
+function poigneeDeMainConnue(req) {
+  const from = nettoyer(req.headers.origin);
+  return enCours.has(from) || actives.includes(from);
+}
 
-  const connecte = await poigneeDeMain(to);
-  if (connecte) return res.send("Connexion établie avec " + to);
-  res.status(502).send("Poignée de main impossible avec " + to);
-});
-
-app.post("/disconnect", express.json(), async (req, res) => {
-  const to = nettoyer(req.body.to);
-  if (!to) return res.sendStatus(400);
-
-  console.log("On oublie " + to + " (envoi de /forget)");
-  desactiver(to, "OUBLIE");
-  try {
-    await poster(to + "/forget");
-  } catch (error) {
-    console.log("Erreur en envoyant /forget à " + to + " : " + error.message);
-  }
-
-  res.send("Connexion avec " + to + " terminée");
-});
-
-app.post("/syn", async (req, res) => {
+async function recevoirSyn(req, res) {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
 
@@ -195,40 +277,59 @@ app.post("/syn", async (req, res) => {
 
   try {
     console.log("SYN-ACK envoyé à " + from);
-    await posterAvecRetry(from + "/syn-ack");
+    await posterEtape(from, "syn-ack", posterAvecRetry);
   } catch (error) {
     enCours.delete(from);
     console.log("Poignée de main oubliée avec " + from + " : " + error.message);
   }
-});
+}
 
-app.post("/syn-ack", async (req, res) => {
+async function recevoirSynAck(req, res) {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
-  if (!enCours.has(from) && !actives.includes(from)) return res.sendStatus(403);
+  if (!poigneeDeMainConnue(req)) return res.sendStatus(403);
 
   console.log("SYN-ACK reçu de " + from);
   res.sendStatus(202);
 
   try {
     console.log("ACK envoyé à " + from);
-    await posterAvecRetry(from + "/ack");
+    await posterEtape(from, "ack", posterAvecRetry);
     activer(from);
     console.log("Connexion établie avec " + from);
   } catch (error) {
     enCours.delete(from);
     console.log("Poignée de main oubliée avec " + from + " : " + error.message);
   }
-});
+}
 
-app.post("/ack", (req, res) => {
+function recevoirAck(req, res) {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
-  if (!enCours.has(from) && !actives.includes(from)) return res.sendStatus(403);
+  if (!poigneeDeMainConnue(req)) return res.sendStatus(403);
 
   console.log("ACK reçu de " + from + " : connexion établie");
   activer(from);
   res.sendStatus(204);
+}
+
+app.post("/syn", recevoirSyn);
+app.post("/syn-ack", recevoirSynAck);
+app.post("/ack", recevoirAck);
+
+app.post("/broker/syn/:id", (req, res) => {
+  enregistrerId(req);
+  return recevoirSyn(req, res);
+});
+
+app.post("/broker/syn-ack/:id", (req, res) => {
+  if (poigneeDeMainConnue(req)) enregistrerId(req);
+  return recevoirSynAck(req, res);
+});
+
+app.post("/broker/ack/:id", (req, res) => {
+  if (poigneeDeMainConnue(req)) enregistrerId(req);
+  return recevoirAck(req, res);
 });
 
 app.get("/health", (req, res) => {
@@ -262,42 +363,91 @@ app.post("/forget", (req, res) => {
   res.sendStatus(204);
 });
 
-app.post("/ingress", express.json(), (req, res) => {
+app.post("/ingress", express.json(), async (req, res) => {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
   if (!actives.includes(from)) return res.sendStatus(403);
-  if (!messageValide(req.body) || nettoyer(req.body.metadata.target) !== MY_URL) return res.sendStatus(400);
+  if (!messageValide(req.body)) return res.sendStatus(400);
 
   const { action, metadata, payload } = req.body;
   const cle = cleMessage(metadata);
   if (vus.has(cle)) return res.sendStatus(208);
   vus.add(cle);
 
-  MESSAGES.push({ from: from, date: Date.now(), action: action, metadata: metadata, payload: payload });
-  console.log("Message reçu de " + metadata.source + " : " + JSON.stringify(payload));
+  if (nettoyer(metadata.target) === MY_URL) {
+    MESSAGES.push({ from: from, date: Date.now(), action: action, metadata: metadata, payload: payload });
+    console.log("Message reçu de " + metadata.source + " : " + JSON.stringify(payload));
+    return res.sendStatus(201);
+  }
+
   res.sendStatus(201);
+  console.log("Message à relayer de " + metadata.source + " pour " + metadata.target);
+  await transmettre({ action: action, metadata: metadata, payload: payload }, from);
+});
+
+app.get("/connexions", (req, res) => {
+  res.json({ enCours: Array.from(enCours), actives: actives, inactives: inactives });
 });
 
 app.get("/messages", (req, res) => {
   res.json(MESSAGES);
 });
 
-app.post("/send", express.json(), async (req, res) => {
-  const to = nettoyer(req.body.to);
-  if (!to) return res.sendStatus(400);
-  if (!actives.includes(to)) return res.status(403).send("Pas de connexion établie avec " + to + " : faire /connect d'abord");
+app.get("/pairs", (req, res) => {
+  res.json([{ id: MY_ID, url: MY_URL, publicKey: "" }, ...Object.values(annuaire)]);
+});
 
+app.post("/connect", express.json(), async (req, res) => {
+  const to = await resoudre(req.body.to);
+  if (!to) return res.status(404).send("Destinataire inconnu : " + req.body.to);
+
+  const connecte = await poigneeDeMain(to);
+  if (connecte) return res.send("Connexion établie avec " + to);
+  res.status(502).send("Poignée de main impossible avec " + to);
+});
+
+app.post("/disconnect", express.json(), async (req, res) => {
+  const to = await resoudre(req.body.to);
+  if (!to) return res.status(404).send("Destinataire inconnu : " + req.body.to);
+
+  console.log("On oublie " + to + " (envoi de /forget)");
+  desactiver(to, "OUBLIE");
   try {
-    const message = creerMessage(to, req.body.action || "MESSAGES", req.body.content);
-    const response = await posterAvecRetry(to + "/ingress", message);
-    console.log("Message envoyé à " + to + " (" + response.status + ") : " + JSON.stringify(req.body.content));
-    res.send("Message envoyé à " + to);
+    await poster(to + "/forget");
   } catch (error) {
-    console.log("Erreur en envoyant le message à " + to + " : " + error.message);
-    res.status(502).send("Message refusé ou non délivré : " + error.message);
+    console.log("Erreur en envoyant /forget à " + to + " : " + error.message);
   }
+
+  res.send("Connexion avec " + to + " terminée");
+});
+
+app.post("/send", express.json(), async (req, res) => {
+  const to = await resoudre(req.body.to);
+  if (!to) return res.status(404).send("Destinataire inconnu : " + req.body.to);
+
+  if (!actives.includes(to)) await poigneeDeMain(to);
+
+  const message = creerMessage(to, req.body.action || "MESSAGES", req.body.content);
+  const resultat = await transmettre(message, null);
+  if (resultat === "relayé") mettreEnFile(message);
+  res.send("Message " + resultat + " : " + to);
+});
+
+app.post("/broadcast", express.json(), async (req, res) => {
+  const action = req.body.action || "MESSAGES";
+  const resultats = {};
+
+  await Promise.all(
+    actives.slice().map(async (to) => {
+      resultats[to] = await transmettre(creerMessage(to, action, req.body.content), null);
+    })
+  );
+
+  res.json(resultats);
 });
 
 app.listen(PORT, () => {
-  console.log("API démarrée sur " + MY_URL);
+  console.log("API démarrée sur " + MY_URL + (MY_ID ? " (" + MY_ID + ")" : ""));
+  annoncer();
+  setInterval(annoncer, DELAI_ANNONCE);
 });
