@@ -60,23 +60,30 @@ function ajouterPair(id, url) {
   if (id && url && id !== MY_ID) annuaire[id] = { id: id, url: nettoyer(url), publicKey: "" };
 }
 
-async function lireAutorite() {
-  try {
-    const response = await axios.get(AUTORITE_URL + "/pairs", { timeout: TIMEOUT });
-    response.data.forEach((pair) => ajouterPair(pair.id, pair.url));
-  } catch (error) {
-    console.log("Impossible de lire l'autorité : " + error.message);
-  }
+function listeAnnuaire() {
+  const connus = Object.values(annuaire).map((pair) => ({ id: pair.id, url: pair.url }));
+  return MY_ID ? [{ id: MY_ID, url: MY_URL }, ...connus] : connus;
 }
 
 async function annoncer() {
   if (!AUTORITE_URL || !MY_ID) return;
 
   try {
-    await axios.post(AUTORITE_URL + "/registre", { id: MY_ID, url: MY_URL, publicKey: "" }, { timeout: TIMEOUT });
-    await lireAutorite();
+    const response = await axios.post(AUTORITE_URL + "/register", { id: MY_ID, url: MY_URL }, { timeout: TIMEOUT });
+    if (Array.isArray(response.data)) response.data.forEach((pair) => ajouterPair(pair.id, pair.url));
   } catch (error) {
     console.log("Autorité injoignable : " + error.message);
+  }
+}
+
+async function desinscrire() {
+  if (!AUTORITE_URL || !MY_ID) return;
+
+  try {
+    await axios.delete(AUTORITE_URL + "/unregister/" + encodeURIComponent(MY_ID), { timeout: 2000 });
+    console.log("Désinscrit de l'autorité");
+  } catch (error) {
+    console.log("Désinscription impossible : " + error.message);
   }
 }
 
@@ -88,7 +95,7 @@ async function resoudre(destinataire) {
   if (!destinataire) return null;
   if (estUneAdresse(destinataire)) return nettoyer(destinataire);
 
-  if (!annuaire[destinataire] && AUTORITE_URL) await lireAutorite();
+  if (!annuaire[destinataire]) await annoncer();
 
   return annuaire[destinataire] ? annuaire[destinataire].url : null;
 }
@@ -148,14 +155,24 @@ function surveiller(adresse, echecs) {
   }, delai);
 }
 
-async function posterEtape(to, etape, envoi) {
-  if (!MY_ID) return envoi(to + "/" + etape);
+async function envoyerSyn(to) {
+  if (!MY_ID) return poster(to + "/syn");
 
   try {
-    return await envoi(to + "/broker/" + etape + "/" + encodeURIComponent(MY_ID));
+    return await poster(to + "/broker/syn/" + encodeURIComponent(MY_ID));
   } catch (error) {
-    if (error.response && error.response.status === 404) return envoi(to + "/" + etape);
+    if (error.response && error.response.status === 404) return poster(to + "/syn");
     throw error;
+  }
+}
+
+async function envoyerRegister(to) {
+  if (!MY_ID) return;
+
+  try {
+    await poster(to + "/register", { id: MY_ID, url: MY_URL });
+  } catch (error) {
+    console.log("Erreur en envoyant /register à " + to + " : " + error.message);
   }
 }
 
@@ -165,7 +182,7 @@ async function poigneeDeMain(to) {
   enCours.add(to);
   try {
     console.log("SYN envoyé à " + to);
-    await posterEtape(to, "syn", poster);
+    await envoyerSyn(to);
   } catch (error) {
     enCours.delete(to);
     console.log("Pas de réponse au SYN de " + to + " : " + error.message);
@@ -266,7 +283,7 @@ function poigneeDeMainConnue(req) {
   return enCours.has(from) || actives.includes(from);
 }
 
-async function recevoirSyn(req, res) {
+async function recevoirSyn(req, res, viaBroker) {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
 
@@ -277,7 +294,8 @@ async function recevoirSyn(req, res) {
 
   try {
     console.log("SYN-ACK envoyé à " + from);
-    await posterEtape(from, "syn-ack", posterAvecRetry);
+    await posterAvecRetry(from + "/syn-ack");
+    if (viaBroker) await envoyerRegister(from);
   } catch (error) {
     enCours.delete(from);
     console.log("Poignée de main oubliée avec " + from + " : " + error.message);
@@ -294,7 +312,7 @@ async function recevoirSynAck(req, res) {
 
   try {
     console.log("ACK envoyé à " + from);
-    await posterEtape(from, "ack", posterAvecRetry);
+    await posterAvecRetry(from + "/ack");
     activer(from);
     console.log("Connexion établie avec " + from);
   } catch (error) {
@@ -313,23 +331,31 @@ function recevoirAck(req, res) {
   res.sendStatus(204);
 }
 
-app.post("/syn", recevoirSyn);
+app.post("/syn", (req, res) => recevoirSyn(req, res, false));
 app.post("/syn-ack", recevoirSynAck);
 app.post("/ack", recevoirAck);
 
 app.post("/broker/syn/:id", (req, res) => {
   enregistrerId(req);
-  return recevoirSyn(req, res);
+  return recevoirSyn(req, res, true);
 });
 
-app.post("/broker/syn-ack/:id", (req, res) => {
-  if (poigneeDeMainConnue(req)) enregistrerId(req);
-  return recevoirSynAck(req, res);
+app.post("/register", express.json(), (req, res) => {
+  const { id, url } = req.body;
+  if (typeof id !== "string" || id === "" || typeof url !== "string" || url === "") return res.sendStatus(400);
+
+  console.log("Register reçu : " + id + " = " + url);
+  ajouterPair(id, url);
+  res.status(201).json(listeAnnuaire());
 });
 
-app.post("/broker/ack/:id", (req, res) => {
-  if (poigneeDeMainConnue(req)) enregistrerId(req);
-  return recevoirAck(req, res);
+app.delete("/unregister/:id", (req, res) => {
+  const id = req.params.id;
+  if (!annuaire[id]) return res.sendStatus(404);
+
+  console.log("Unregister reçu : " + id);
+  delete annuaire[id];
+  res.sendStatus(204);
 });
 
 app.get("/health", (req, res) => {
@@ -394,7 +420,7 @@ app.get("/messages", (req, res) => {
 });
 
 app.get("/pairs", (req, res) => {
-  res.json([{ id: MY_ID, url: MY_URL, publicKey: "" }, ...Object.values(annuaire)]);
+  res.json(listeAnnuaire());
 });
 
 app.post("/connect", express.json(), async (req, res) => {
@@ -446,8 +472,20 @@ app.post("/broadcast", express.json(), async (req, res) => {
   res.json(resultats);
 });
 
+app.use((err, req, res, next) => {
+  console.log("Erreur serveur : " + err.message);
+  res.sendStatus(err.status || 500);
+});
+
 app.listen(PORT, () => {
   console.log("API démarrée sur " + MY_URL + (MY_ID ? " (" + MY_ID + ")" : ""));
+  if (!MY_ID) console.log("Attention : MY_ID est vide dans le .env, la partie B (broker, prénoms) est désactivée");
+  if (MY_ID && !AUTORITE_URL) console.log("Attention : AUTORITE_URL est vide dans le .env, pas d'inscription au broker");
   annoncer();
   setInterval(annoncer, DELAI_ANNONCE);
+});
+
+process.on("SIGINT", async () => {
+  await desinscrire();
+  process.exit(0);
 });
