@@ -1,0 +1,19 @@
+meta {
+  name: connect A par id
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{A}}/connect
+  body: json
+  auth: none
+}
+
+body:json {
+  { "to": "{{ID_B}}" }
+}
+
+docs {
+  connexion avec l'id de B (passe par /broker/syn/A) : Connexion établie avec http://localhost:3001
+}

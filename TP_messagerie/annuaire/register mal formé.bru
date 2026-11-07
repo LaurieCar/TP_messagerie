@@ -1,0 +1,19 @@
+meta {
+  name: register mal formé
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{B}}/register
+  body: json
+  auth: none
+}
+
+body:json {
+  { "id": "C" }
+}
+
+docs {
+  register sans url : 400 Bad Request
+}

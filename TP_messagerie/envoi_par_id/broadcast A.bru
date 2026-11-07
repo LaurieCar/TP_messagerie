@@ -1,0 +1,22 @@
+meta {
+  name: broadcast A
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{A}}/broadcast
+  body: json
+  auth: none
+}
+
+body:json {
+  { "content": { "message": "message pour tout le monde" } }
+}
+
+docs {
+  envoi à toutes les connexions actives de A, retourne :
+  {
+    "http://localhost:3001": "envoyé"
+  }
+}

@@ -1,0 +1,15 @@
+meta {
+  name: unregister sur B
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{B}}/unregister/C
+  body: none
+  auth: none
+}
+
+docs {
+  suppression de C de l'annuaire de B : 204, et 404 si on la relance
+}

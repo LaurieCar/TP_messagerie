@@ -1,0 +1,15 @@
+meta {
+  name: messages reçu par B
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{B}}/messages
+  body: none
+  auth: none
+}
+
+docs {
+  le message envoyé par A apparaît dans la liste
+}

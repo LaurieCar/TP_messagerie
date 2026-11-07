@@ -1,0 +1,19 @@
+meta {
+  name: send A par id
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{A}}/send
+  body: json
+  auth: none
+}
+
+body:json {
+  { "to": "{{ID_B}}", "content": { "message": "message privé pour B" } }
+}
+
+docs {
+  message privé avec l'id de B : Message envoyé : http://localhost:3001
+}
