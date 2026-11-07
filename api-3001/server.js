@@ -1,5 +1,6 @@
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 
 const PORT = 3001;
 const MY_ID = process.env.MY_ID || "";
@@ -25,6 +26,11 @@ const MESSAGES = [];
 const vus = new Set();
 let fileAttente = [];
 let dernierHorodatage = 0;
+const MA_CLE = crypto.generateKeyPairSync("x25519");
+const MA_CLE_PUBLIQUE = MA_CLE.publicKey.export({ format: "jwk" }).x;
+const cles = {};
+
+axios.defaults.headers.common["Signature-Input"] = 'sig1=();keyid="' + MA_CLE_PUBLIQUE + '"';
 
 function nettoyer(adresse) {
   return adresse && adresse.replace(/\/+$/, "");
@@ -123,6 +129,7 @@ function desactiver(adresse, raison) {
   enCours.delete(adresse);
   arreterSurveillance(adresse);
   inactives[adresse] = raison;
+  delete cles[adresse];
 }
 
 function surveiller(adresse, echecs) {
@@ -204,6 +211,57 @@ function horodater() {
   return new Date(dernierHorodatage).toISOString();
 }
 
+function lireCle(entete) {
+  const resultat = /keyid="([A-Za-z0-9_-]{43})"/.exec(entete || "");
+  if (!resultat) return null;
+
+  try {
+    const objet = crypto.createPublicKey({ key: { kty: "OKP", crv: "X25519", x: resultat[1] }, format: "jwk" });
+    return { texte: resultat[1], objet: objet };
+  } catch (error) {
+    return null;
+  }
+}
+
+function verifierCle(req, res, next) {
+  const cle = lireCle(req.headers["signature-input"]);
+  if (!cle) return res.sendStatus(401);
+
+  const from = nettoyer(req.headers.origin);
+  if (cles[from] && cles[from].texte !== cle.texte) return res.sendStatus(403);
+
+  req.cle = cle;
+  next();
+}
+
+function retenirCle(adresse, cle) {
+  const secret = crypto.diffieHellman({ privateKey: MA_CLE.privateKey, publicKey: cle.objet });
+  cles[adresse] = { texte: cle.texte, secret: Buffer.from(crypto.hkdfSync("sha256", secret, Buffer.alloc(0), "tp-messagerie", 32)) };
+}
+
+function chiffrer(adresse, message) {
+  if (message.payload === undefined) return message;
+
+  const iv = crypto.randomBytes(12);
+  const chiffreur = crypto.createCipheriv("aes-256-gcm", cles[adresse].secret, iv);
+  const data = Buffer.concat([chiffreur.update(JSON.stringify(message.payload)), chiffreur.final()]);
+  const payload = { iv: iv.toString("base64url"), data: data.toString("base64url"), tag: chiffreur.getAuthTag().toString("base64url") };
+  return { action: message.action, metadata: message.metadata, payload: payload };
+}
+
+function dechiffrer(adresse, payload) {
+  if (payload === undefined) return undefined;
+
+  const dechiffreur = crypto.createDecipheriv("aes-256-gcm", cles[adresse].secret, Buffer.from(payload.iv, "base64url"));
+  dechiffreur.setAuthTag(Buffer.from(payload.tag, "base64url"));
+  const texte = Buffer.concat([dechiffreur.update(Buffer.from(payload.data, "base64url")), dechiffreur.final()]);
+  return JSON.parse(texte.toString());
+}
+
+async function envoyerIngress(adresse, message) {
+  return posterAvecRetry(adresse + "/ingress", chiffrer(adresse, message));
+}
+
 function cleMessage(metadata) {
   return metadata.source + "|" + metadata.timestamp;
 }
@@ -231,7 +289,7 @@ async function viderFile(adresse) {
 
   for (const element of aEnvoyer) {
     try {
-      await posterAvecRetry(adresse + "/ingress", element.message);
+      await envoyerIngress(adresse, element.message);
       console.log("Message de la file envoyé à " + adresse);
     } catch (error) {
       fileAttente.push(element);
@@ -245,7 +303,7 @@ async function transmettre(message, origine) {
 
   if (actives.includes(target)) {
     try {
-      await posterAvecRetry(target + "/ingress", message);
+      await envoyerIngress(target, message);
       console.log("Message envoyé à " + target);
       return "envoyé";
     } catch (error) {
@@ -255,7 +313,7 @@ async function transmettre(message, origine) {
   }
 
   const voisins = actives.filter((adresse) => adresse !== origine);
-  const envois = await Promise.allSettled(voisins.map((adresse) => posterAvecRetry(adresse + "/ingress", message)));
+  const envois = await Promise.allSettled(voisins.map((adresse) => envoyerIngress(adresse, message)));
 
   if (!envois.some((envoi) => envoi.status === "fulfilled")) return mettreEnFile(message);
 
@@ -288,6 +346,7 @@ async function recevoirSyn(req, res, viaBroker) {
   if (!from) return res.sendStatus(400);
 
   console.log("SYN reçu de " + from);
+  retenirCle(from, req.cle);
   arreterSurveillance(from);
   enCours.add(from);
   res.sendStatus(202);
@@ -308,6 +367,7 @@ async function recevoirSynAck(req, res) {
   if (!poigneeDeMainConnue(req)) return res.sendStatus(403);
 
   console.log("SYN-ACK reçu de " + from);
+  retenirCle(from, req.cle);
   res.sendStatus(202);
 
   try {
@@ -327,15 +387,16 @@ function recevoirAck(req, res) {
   if (!poigneeDeMainConnue(req)) return res.sendStatus(403);
 
   console.log("ACK reçu de " + from + " : connexion établie");
+  retenirCle(from, req.cle);
   activer(from);
   res.sendStatus(204);
 }
 
-app.post("/syn", (req, res) => recevoirSyn(req, res, false));
-app.post("/syn-ack", recevoirSynAck);
-app.post("/ack", recevoirAck);
+app.post("/syn", verifierCle, (req, res) => recevoirSyn(req, res, false));
+app.post("/syn-ack", verifierCle, recevoirSynAck);
+app.post("/ack", verifierCle, recevoirAck);
 
-app.post("/broker/syn/:id", (req, res) => {
+app.post("/broker/syn/:id", verifierCle, (req, res) => {
   enregistrerId(req);
   return recevoirSyn(req, res, true);
 });
@@ -371,7 +432,7 @@ app.get("/health", (req, res) => {
   }
 });
 
-app.post("/pong", (req, res) => {
+app.post("/pong", verifierCle, (req, res) => {
   const from = nettoyer(req.headers.origin);
   if (!actives.includes(from)) return res.sendStatus(403);
 
@@ -379,7 +440,7 @@ app.post("/pong", (req, res) => {
   res.sendStatus(204);
 });
 
-app.post("/forget", (req, res) => {
+app.post("/forget", verifierCle, (req, res) => {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
   if (!actives.includes(from)) return res.sendStatus(403);
@@ -389,13 +450,20 @@ app.post("/forget", (req, res) => {
   res.sendStatus(204);
 });
 
-app.post("/ingress", express.json(), async (req, res) => {
+app.post("/ingress", verifierCle, express.json(), async (req, res) => {
   const from = nettoyer(req.headers.origin);
   if (!from) return res.sendStatus(400);
   if (!actives.includes(from)) return res.sendStatus(403);
   if (!messageValide(req.body)) return res.sendStatus(400);
 
-  const { action, metadata, payload } = req.body;
+  let payload;
+  try {
+    payload = dechiffrer(from, req.body.payload);
+  } catch (error) {
+    return res.sendStatus(400);
+  }
+
+  const { action, metadata } = req.body;
   const cle = cleMessage(metadata);
   if (vus.has(cle)) return res.sendStatus(208);
   vus.add(cle);
