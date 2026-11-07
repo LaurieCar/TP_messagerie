@@ -1,0 +1,24 @@
+meta {
+  name: register A
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{AUTORITE}}/register
+  body: json
+  auth: none
+}
+
+body:json {
+  { "id": "{{ID_A}}", "url": "{{A}}" }
+}
+
+docs {
+  inscription de A à l'autorité : 201 si nouveau, 200 si déjà inscrit
+  retourne les pairs en ligne :
+  [
+    { "id": "A", "url": "http://localhost:3000" },
+    { "id": "B", "url": "http://localhost:3001" }
+  ]
+}

@@ -1,0 +1,20 @@
+meta {
+  name: send A vers B hors ligne
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{A}}/send
+  body: json
+  auth: none
+}
+
+body:json {
+  { "to": "{{B}}", "content": { "message": "message pendant que B est arrêté" } }
+}
+
+docs {
+  B arrêté : le message est gardé en file 2 min, Message mis en file : http://localhost:3001
+  quand B est PERDU dans connexions A, on relance B et on refait connect A, le message arrive
+}

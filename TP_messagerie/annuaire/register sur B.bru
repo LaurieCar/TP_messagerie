@@ -1,0 +1,19 @@
+meta {
+  name: register sur B
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{B}}/register
+  body: json
+  auth: none
+}
+
+body:json {
+  { "id": "C", "url": "http://localhost:3002" }
+}
+
+docs {
+  ajout d'un pair C dans l'annuaire de B : 201, retourne l'annuaire avec C dedans
+}

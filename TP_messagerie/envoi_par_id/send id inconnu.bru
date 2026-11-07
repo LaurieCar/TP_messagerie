@@ -1,0 +1,19 @@
+meta {
+  name: send id inconnu
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{A}}/send
+  body: json
+  auth: none
+}
+
+body:json {
+  { "to": "inconnu", "content": { "message": "test" } }
+}
+
+docs {
+  envoi à un id qui n'existe pas : 404, Destinataire inconnu : inconnu
+}

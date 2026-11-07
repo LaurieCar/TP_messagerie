@@ -1,0 +1,16 @@
+meta {
+  name: pairs autorite (B hors ligne)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{AUTORITE}}/pairs
+  body: none
+  auth: none
+}
+
+docs {
+  B arrêté avec Ctrl+C : il n'est plus dans la liste
+  B coupé d'un coup : il reste mais passe en "hors ligne" au bout d'environ 50 s
+}
